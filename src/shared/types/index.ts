@@ -18,3 +18,22 @@ export interface RateLimitConfig {
   requestsPerSecond: number;
   burstSize?: number;
 }
+
+export interface HeaderTransform {
+  add?: Record<string, string>;
+  remove?: string[];
+  set?: Record<string, string>;
+}
+
+export interface TransformConfig {
+  request?: {
+    headers?: HeaderTransform;
+    pathRewrite?: {
+      pattern: string;
+      replacement: string;
+    };
+  };
+  response?: {
+    headers?: HeaderTransform;
+  };
+}
