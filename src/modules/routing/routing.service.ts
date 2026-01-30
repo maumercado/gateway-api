@@ -1,12 +1,8 @@
+import { selectUpstream } from '../../shared/load-balancer/index.js';
 
 import * as routingRepository from './routing.repository.js';
 import type { RouteRow } from './routing.schema.js';
-import type {
-  CreateRouteInput,
-  MatchedRoute,
-  Route,
-} from './routing.types.js';
-import type { UpstreamConfig } from '../../shared/types/index.js';
+import type { CreateRouteInput, MatchedRoute, Route } from './routing.types.js';
 
 function mapToRoute(row: RouteRow): Route {
   return {
@@ -17,6 +13,7 @@ function mapToRoute(row: RouteRow): Route {
     pathType: row.pathType,
     upstreams: row.upstreams,
     loadBalancing: row.loadBalancing,
+    transform: row.transform ?? null,
     isActive: row.isActive,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -48,9 +45,18 @@ export async function createRoute(input: CreateRouteInput): Promise<Route> {
     pathType: input.pathType ?? 'exact',
     upstreams: input.upstreams,
     loadBalancing: input.loadBalancing ?? 'round-robin',
+    transform: input.transform ?? null,
   });
 
   return mapToRoute(row);
+}
+
+export async function updateRoute(
+  id: string,
+  data: Partial<Omit<CreateRouteInput, 'tenantId'>> & { isActive?: boolean }
+): Promise<Route | null> {
+  const row = await routingRepository.updateRoute(id, data);
+  return row ? mapToRoute(row) : null;
 }
 
 export async function deleteRoute(id: string): Promise<boolean> {
@@ -72,21 +78,17 @@ function matchPath(
       );
 
     case 'regex':
-      // Regex matching is out of scope for Phase 1
-      return false;
+      try {
+        const regex = new RegExp(`^${routePath}$`);
+        return regex.test(requestPath);
+      } catch {
+        // Invalid regex pattern
+        return false;
+      }
 
     default:
       return false;
   }
-}
-
-function selectUpstream(
-  upstreams: UpstreamConfig[],
-  _loadBalancing: Route['loadBalancing']
-): UpstreamConfig {
-  // For Phase 1, just return the first upstream
-  // Load balancing algorithms will be implemented in Phase 2
-  return upstreams[0]!;
 }
 
 export async function matchRoute(
@@ -108,8 +110,12 @@ export async function matchRoute(
       continue;
     }
 
-    // Found a match
-    const upstream = selectUpstream(route.upstreams, route.loadBalancing);
+    // Found a match - select upstream using load balancing strategy
+    const upstream = selectUpstream(
+      route.upstreams,
+      route.loadBalancing,
+      route.id
+    );
 
     return {
       route,

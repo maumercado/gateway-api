@@ -2,13 +2,18 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import Fastify from 'fastify';
 
-import { tenantAuthMiddleware } from './middleware/tenant-auth.js';
 import { handleProxy } from './modules/routing/routing.handler.js';
+import { routingRoutes } from './modules/routing/routing.routes.js';
+import { tenantRoutes } from './modules/tenant/tenant.routes.js';
 import type { Tenant } from './modules/tenant/tenant.types.js';
+import adminAuthPlugin from './plugins/admin-auth.js';
+import databasePlugin from './plugins/database.js';
+import rateLimitPlugin from './plugins/rate-limit.js';
+import redisPlugin from './plugins/redis.js';
+import routingServicePlugin from './plugins/routing-service.js';
+import tenantAuthPlugin from './plugins/tenant-auth.js';
+import tenantServicePlugin from './plugins/tenant-service.js';
 import { config } from './shared/config/index.js';
-import { closeDatabase } from './shared/database/client.js';
-import { logger } from './shared/logger/index.js';
-import { closeRedis, connectRedis } from './shared/redis/client.js';
 
 interface ProxyRequest {
   Params: Record<string, string>;
@@ -35,7 +40,15 @@ export async function createGateway() {
     genReqId: () => crypto.randomUUID(),
   });
 
-  // Register plugins
+  // Register infrastructure plugins (order matters due to dependencies)
+  await app.register(databasePlugin);
+  await app.register(redisPlugin);
+
+  // Register service plugins
+  await app.register(tenantServicePlugin);
+  await app.register(routingServicePlugin);
+
+  // Register core plugins
   await app.register(cors, {
     origin: true,
     credentials: true,
@@ -44,6 +57,11 @@ export async function createGateway() {
   await app.register(helmet, {
     contentSecurityPolicy: false,
   });
+
+  // Register auth plugins (these depend on infrastructure plugins)
+  await app.register(tenantAuthPlugin);
+  await app.register(rateLimitPlugin);
+  await app.register(adminAuthPlugin);
 
   // Health check endpoint (no auth required)
   app.get('/health', async (_request, reply) => {
@@ -55,18 +73,27 @@ export async function createGateway() {
 
   // Ready check endpoint (no auth required)
   app.get('/ready', async (_request, reply) => {
-    // Could add database/redis connectivity checks here
     return reply.send({
       status: 'ready',
       timestamp: new Date().toISOString(),
     });
   });
 
-  // Proxy routes - require tenant authentication
+  // Admin API routes - use prefix and preHandler
+  await app.register(
+    async (adminApp) => {
+      adminApp.addHook('preHandler', adminApp.adminAuth);
+      await adminApp.register(tenantRoutes);
+      await adminApp.register(routingRoutes);
+    },
+    { prefix: '/admin' }
+  );
+
+  // Proxy routes - require tenant authentication and rate limiting
   app.route<ProxyRequest>({
     method: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'],
     url: '/*',
-    preHandler: [tenantAuthMiddleware],
+    preHandler: [app.tenantAuth, app.rateLimit],
     handler: async (request, reply) => {
       if (!request.tenant) {
         return reply.status(401).send({
@@ -88,25 +115,16 @@ export async function createGateway() {
 export async function startGateway() {
   const app = await createGateway();
 
-  // Connect to Redis
-  await connectRedis();
-  logger.info('Connected to Redis');
-
-  // Graceful shutdown
+  // Graceful shutdown is handled by plugin onClose hooks
   const shutdown = async (signal: string) => {
-    logger.info({ signal }, 'Received shutdown signal');
+    app.log.info({ signal }, 'Received shutdown signal');
 
     try {
-      await app.close();
-      logger.info('Fastify server closed');
-
-      await closeRedis();
-      await closeDatabase();
-
-      logger.info('Graceful shutdown complete');
+      await app.close(); // This triggers all onClose hooks
+      app.log.info('Graceful shutdown complete');
       process.exit(0);
     } catch (error) {
-      logger.error({ err: error }, 'Error during shutdown');
+      app.log.error({ err: error }, 'Error during shutdown');
       process.exit(1);
     }
   };
@@ -121,12 +139,12 @@ export async function startGateway() {
       host: '0.0.0.0',
     });
 
-    logger.info(
+    app.log.info(
       { port: config.PORT, env: config.NODE_ENV },
       'API Gateway started'
     );
   } catch (error) {
-    logger.error({ err: error }, 'Failed to start server');
+    app.log.error({ err: error }, 'Failed to start server');
     process.exit(1);
   }
 

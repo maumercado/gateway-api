@@ -1,4 +1,4 @@
-import type { UpstreamConfig } from '../../shared/types/index.js';
+import type { TransformConfig, UpstreamConfig } from '../../shared/types/index.js';
 
 export type PathType = 'exact' | 'prefix' | 'regex';
 export type LoadBalancing = 'round-robin' | 'weighted' | 'random';
@@ -12,6 +12,7 @@ export interface Route {
   pathType: PathType;
   upstreams: UpstreamConfig[];
   loadBalancing: LoadBalancing;
+  transform: TransformConfig | null;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -24,6 +25,7 @@ export interface CreateRouteInput {
   pathType?: PathType;
   upstreams: UpstreamConfig[];
   loadBalancing?: LoadBalancing;
+  transform?: TransformConfig | null;
 }
 
 export interface MatchedRoute {

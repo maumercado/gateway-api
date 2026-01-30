@@ -1,9 +1,10 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
-import { matchRoute } from './routing.service.js';
-import { logger } from '../../shared/logger/index.js';
+import {
+  transformRequest,
+  transformResponseHeaders,
+} from '../../shared/transformer/index.js';
 import type { Tenant } from '../tenant/tenant.types.js';
-
 
 interface ProxyRequest extends FastifyRequest {
   tenant: Tenant;
@@ -14,20 +15,21 @@ export async function handleProxy(
   reply: FastifyReply
 ): Promise<void> {
   const { tenant } = request;
-  const { method, url } = request;
+  const { method, url, log, server } = request;
+  const { routingService } = server;
 
   // Parse the URL to get just the path
   const urlPath = url.split('?')[0] ?? '/';
 
-  logger.debug(
+  log.debug(
     { tenantId: tenant.id, method, path: urlPath },
     'Matching route for request'
   );
 
-  const matched = await matchRoute(tenant.id, method, urlPath);
+  const matched = await routingService.matchRoute(tenant.id, method, urlPath);
 
   if (!matched) {
-    logger.debug(
+    log.debug(
       { tenantId: tenant.id, method, path: urlPath },
       'No matching route found'
     );
@@ -54,7 +56,7 @@ export async function handleProxy(
     upstreamUrl = `${upstreamUrl}?${queryString}`;
   }
 
-  logger.debug(
+  log.debug(
     {
       tenantId: tenant.id,
       upstreamUrl,
@@ -90,14 +92,23 @@ export async function handleProxy(
     headers['x-forwarded-proto'] = request.protocol;
     headers['x-tenant-id'] = tenant.id;
 
+    // Apply request transformations
+    const transformed = transformRequest(
+      headers,
+      upstreamUrl,
+      matched.route.transform
+    );
+    const finalHeaders = transformed.headers;
+    const finalUrl = transformed.path;
+
     // Make the upstream request
     const timeout = upstream.timeout ?? 30000;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    const upstreamResponse = await fetch(upstreamUrl, {
+    const upstreamResponse = await fetch(finalUrl, {
       method,
-      headers,
+      headers: finalHeaders,
       body: method !== 'GET' && method !== 'HEAD' ? (request.body as string) : undefined,
       signal: controller.signal,
     });
@@ -105,7 +116,7 @@ export async function handleProxy(
     clearTimeout(timeoutId);
 
     // Forward the response
-    const responseHeaders: Record<string, string> = {};
+    let responseHeaders: Record<string, string> = {};
     upstreamResponse.headers.forEach((value, key) => {
       // Skip hop-by-hop headers
       if (
@@ -117,6 +128,12 @@ export async function handleProxy(
       }
     });
 
+    // Apply response header transformations
+    responseHeaders = transformResponseHeaders(
+      responseHeaders,
+      matched.route.transform
+    );
+
     const responseBody = await upstreamResponse.text();
 
     return reply
@@ -125,7 +142,7 @@ export async function handleProxy(
       .send(responseBody);
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      logger.error(
+      log.error(
         { tenantId: tenant.id, upstreamUrl },
         'Upstream request timeout'
       );
@@ -135,7 +152,7 @@ export async function handleProxy(
       });
     }
 
-    logger.error(
+    log.error(
       { err: error, tenantId: tenant.id, upstreamUrl },
       'Upstream request failed'
     );
