@@ -64,7 +64,7 @@ export async function createGateway() {
 
   // Proxy routes - require tenant authentication
   app.route<ProxyRequest>({
-    method: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
+    method: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'],
     url: '/*',
     preHandler: [tenantAuthMiddleware],
     handler: async (request, reply) => {

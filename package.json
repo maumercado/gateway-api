@@ -13,9 +13,10 @@
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "format": "prettier --write src",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:generate": "tsx node_modules/drizzle-kit/bin.cjs generate",
+    "db:migrate": "tsx node_modules/drizzle-kit/bin.cjs migrate",
+    "db:studio": "tsx node_modules/drizzle-kit/bin.cjs studio",
+    "db:seed": "tsx scripts/seed.ts"
   },
   "keywords": [
     "api-gateway",
