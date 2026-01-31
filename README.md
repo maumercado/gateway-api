@@ -15,7 +15,7 @@ A production-ready, multi-tenant API Gateway built with Node.js, TypeScript, and
 ## Prerequisites
 
 - Node.js 24+
-- pnpm 9+
+- pnpm 10+
 - Docker & Docker Compose (for local development)
 
 ## Getting Started
