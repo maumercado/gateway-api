@@ -11,6 +11,10 @@ const envSchema = z.object({
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])
     .default('info'),
+  // Observability settings
+  METRICS_ENABLED: z.coerce.boolean().default(true),
+  TRACING_ENABLED: z.coerce.boolean().default(false),
+  TRACING_ENDPOINT: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

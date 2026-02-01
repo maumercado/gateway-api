@@ -1,6 +1,12 @@
 import type { Redis } from 'ioredis';
 import crypto from 'crypto';
 
+import {
+  circuitBreakerState,
+  circuitBreakerStateToNumber,
+  circuitBreakerTransitionsTotal,
+  normalizeUpstreamLabel,
+} from '../metrics/index.js';
 import type {
   CircuitBreakerConfig,
   CircuitBreakerState,
@@ -70,8 +76,33 @@ export class CircuitBreaker {
     }
   }
 
-  private async setStatus(status: CircuitBreakerStatus): Promise<void> {
+  private async setStatus(
+    status: CircuitBreakerStatus,
+    previousState?: CircuitBreakerState
+  ): Promise<void> {
     await this.redis.setex(this.redisKey, this.getTtl(), JSON.stringify(status));
+
+    // Update circuit breaker state gauge
+    const upstreamLabel = normalizeUpstreamLabel(this.upstreamUrl);
+    circuitBreakerState.set(
+      {
+        tenant_id: this.tenantId,
+        route_id: this.routeId,
+        upstream: upstreamLabel,
+      },
+      circuitBreakerStateToNumber(status.state)
+    );
+
+    // Track state transitions
+    if (previousState && previousState !== status.state) {
+      circuitBreakerTransitionsTotal.inc({
+        tenant_id: this.tenantId,
+        route_id: this.routeId,
+        upstream: upstreamLabel,
+        from_state: previousState,
+        to_state: status.state,
+      });
+    }
   }
 
   async canExecute(): Promise<boolean> {
@@ -90,12 +121,15 @@ export class CircuitBreaker {
         const timeSinceOpen = Date.now() - status.lastStateChange;
         if (timeSinceOpen >= this.config.timeout) {
           // Transition to HALF_OPEN
-          await this.setStatus({
-            ...status,
-            state: 'HALF_OPEN',
-            successes: 0,
-            lastStateChange: Date.now(),
-          });
+          await this.setStatus(
+            {
+              ...status,
+              state: 'HALF_OPEN',
+              successes: 0,
+              lastStateChange: Date.now(),
+            },
+            status.state
+          );
           return true;
         }
         return false;
@@ -122,13 +156,16 @@ export class CircuitBreaker {
 
       if (newSuccesses >= this.config.successThreshold) {
         // Transition to CLOSED
-        await this.setStatus({
-          state: 'CLOSED',
-          failures: 0,
-          successes: 0,
-          lastFailureTime: status.lastFailureTime,
-          lastStateChange: Date.now(),
-        });
+        await this.setStatus(
+          {
+            state: 'CLOSED',
+            failures: 0,
+            successes: 0,
+            lastFailureTime: status.lastFailureTime,
+            lastStateChange: Date.now(),
+          },
+          status.state
+        );
       } else {
         await this.setStatus({
           ...status,
@@ -154,25 +191,31 @@ export class CircuitBreaker {
 
     if (status.state === 'HALF_OPEN') {
       // Any failure in HALF_OPEN transitions back to OPEN
-      await this.setStatus({
-        state: 'OPEN',
-        failures: status.failures + 1,
-        successes: 0,
-        lastFailureTime: now,
-        lastStateChange: now,
-      });
+      await this.setStatus(
+        {
+          state: 'OPEN',
+          failures: status.failures + 1,
+          successes: 0,
+          lastFailureTime: now,
+          lastStateChange: now,
+        },
+        status.state
+      );
     } else if (status.state === 'CLOSED') {
       const newFailures = status.failures + 1;
 
       if (newFailures >= this.config.failureThreshold) {
         // Transition to OPEN
-        await this.setStatus({
-          state: 'OPEN',
-          failures: newFailures,
-          successes: 0,
-          lastFailureTime: now,
-          lastStateChange: now,
-        });
+        await this.setStatus(
+          {
+            state: 'OPEN',
+            failures: newFailures,
+            successes: 0,
+            lastFailureTime: now,
+            lastStateChange: now,
+          },
+          status.state
+        );
       } else {
         await this.setStatus({
           ...status,

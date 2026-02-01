@@ -3,15 +3,21 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { createCircuitBreaker } from '../../shared/circuit-breaker/index.js';
 import { sendFallbackResponse, shouldUseFallback } from '../../shared/fallback/index.js';
 import {
-  transformRequest,
-  transformResponseHeaders,
-} from '../../shared/transformer/index.js';
-import type { TimeoutConfig } from '../../shared/types/index.js';
+  normalizeUpstreamLabel,
+  retryAttemptsTotal,
+  upstreamRequestDurationSeconds,
+  upstreamRequestsTotal,
+} from '../../shared/metrics/index.js';
 import {
   withRetry,
   isRetryableStatusCode,
   type RetryContext,
 } from '../../shared/retry/index.js';
+import {
+  transformRequest,
+  transformResponseHeaders,
+} from '../../shared/transformer/index.js';
+import type { TimeoutConfig } from '../../shared/types/index.js';
 import type { Tenant } from '../tenant/tenant.types.js';
 import type { Route } from './routing.types.js';
 
@@ -42,18 +48,31 @@ function resolveTimeout(
   return upstreamTimeout ?? 30000;
 }
 
+interface UpstreamRequestOptions {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: string | undefined;
+  timeout: number;
+  tenantId: string;
+}
+
+interface UpstreamRequestResult {
+  response: Response;
+  durationSeconds: number;
+}
+
 /**
  * Make an upstream request with the given parameters
+ * Also records timing metrics for the upstream call
  */
 async function makeUpstreamRequest(
-  url: string,
-  method: string,
-  headers: Record<string, string>,
-  body: string | undefined,
-  timeout: number
-): Promise<Response> {
+  options: UpstreamRequestOptions
+): Promise<UpstreamRequestResult> {
+  const { url, method, headers, body, timeout, tenantId } = options;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const startTime = process.hrtime.bigint();
 
   try {
     const response = await fetch(url, {
@@ -62,7 +81,30 @@ async function makeUpstreamRequest(
       body: method !== 'GET' && method !== 'HEAD' ? body : undefined,
       signal: controller.signal,
     });
-    return response;
+
+    const endTime = process.hrtime.bigint();
+    const durationSeconds = Number(endTime - startTime) / 1e9;
+    const upstreamLabel = normalizeUpstreamLabel(url);
+
+    // Record upstream metrics
+    upstreamRequestsTotal.inc({
+      tenant_id: tenantId,
+      upstream: upstreamLabel,
+      method,
+      status_code: response.status.toString(),
+    });
+
+    upstreamRequestDurationSeconds.observe(
+      {
+        tenant_id: tenantId,
+        upstream: upstreamLabel,
+        method,
+        status_code: response.status.toString(),
+      },
+      durationSeconds
+    );
+
+    return { response, durationSeconds };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -230,6 +272,13 @@ export async function handleProxy(
       const result = await withRetry<Response>(
         async (context: RetryContext) => {
           if (context.attempt > 0) {
+            // Track retry attempt in metrics
+            retryAttemptsTotal.inc({
+              tenant_id: tenant.id,
+              route_id: route.id,
+              attempt: context.attempt.toString(),
+            });
+
             log.debug(
               {
                 tenantId: tenant.id,
@@ -241,13 +290,14 @@ export async function handleProxy(
             );
           }
 
-          const response = await makeUpstreamRequest(
-            finalUrl,
+          const { response } = await makeUpstreamRequest({
+            url: finalUrl,
             method,
-            finalHeaders,
-            requestBody,
-            timeout
-          );
+            headers: finalHeaders,
+            body: requestBody,
+            timeout,
+            tenantId: tenant.id,
+          });
 
           // If response is retryable and we have retries left, throw to trigger retry
           if (
@@ -313,13 +363,15 @@ export async function handleProxy(
       upstreamResponse = result.result;
     } else {
       // No retry, direct request
-      upstreamResponse = await makeUpstreamRequest(
-        finalUrl,
+      const { response } = await makeUpstreamRequest({
+        url: finalUrl,
         method,
-        finalHeaders,
-        requestBody,
-        timeout
-      );
+        headers: finalHeaders,
+        body: requestBody,
+        timeout,
+        tenantId: tenant.id,
+      });
+      upstreamResponse = response;
     }
 
     // Record success in circuit breaker

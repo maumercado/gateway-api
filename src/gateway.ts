@@ -9,6 +9,7 @@ import type { Tenant } from './modules/tenant/tenant.types.js';
 import adminAuthPlugin from './plugins/admin-auth.js';
 import databasePlugin from './plugins/database.js';
 import healthCheckPlugin from './plugins/health-check.js';
+import metricsPlugin from './plugins/metrics.js';
 import rateLimitPlugin from './plugins/rate-limit.js';
 import redisPlugin from './plugins/redis.js';
 import routingServicePlugin from './plugins/routing-service.js';
@@ -44,6 +45,9 @@ export async function createGateway() {
   // Register infrastructure plugins (order matters due to dependencies)
   await app.register(databasePlugin);
   await app.register(redisPlugin);
+
+  // Register metrics plugin early to capture all requests
+  await app.register(metricsPlugin);
 
   // Register service plugins
   await app.register(tenantServicePlugin);

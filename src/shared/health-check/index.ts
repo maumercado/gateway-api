@@ -1,6 +1,7 @@
 import type { Redis } from 'ioredis';
 import crypto from 'crypto';
 
+import { healthCheckStatus, normalizeUpstreamLabel } from '../metrics/index.js';
 import type { HealthCheckConfig, HealthStatus, UpstreamConfig } from '../types/index.js';
 
 const DEFAULT_CONFIG: HealthCheckConfig = {
@@ -78,6 +79,17 @@ export class HealthChecker {
 
   private async setStatus(status: HealthStatus): Promise<void> {
     await this.redis.setex(this.redisKey, this.getTtl(), JSON.stringify(status));
+
+    // Update health check status gauge
+    const upstreamLabel = normalizeUpstreamLabel(this.upstream.url);
+    healthCheckStatus.set(
+      {
+        tenant_id: this.tenantId,
+        route_id: this.routeId,
+        upstream: upstreamLabel,
+      },
+      status.healthy ? 1 : 0
+    );
   }
 
   async isHealthy(): Promise<boolean> {

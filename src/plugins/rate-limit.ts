@@ -2,6 +2,10 @@ import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import fp from 'fastify-plugin';
 
 import {
+  rateLimitHitsTotal,
+  rateLimitRemaining,
+} from '../shared/metrics/index.js';
+import {
   checkRateLimit,
   getTenantRateLimitKey,
 } from '../shared/rate-limiter/index.js';
@@ -37,11 +41,17 @@ const rateLimitPlugin: FastifyPluginAsync = async (fastify) => {
 
       const result = await checkRateLimit(key, config);
 
+      // Track rate limit remaining in metrics
+      rateLimitRemaining.set({ tenant_id: tenant.id }, result.remaining);
+
       reply.header('X-RateLimit-Limit', result.limit);
       reply.header('X-RateLimit-Remaining', result.remaining);
       reply.header('X-RateLimit-Reset', Math.ceil(result.resetAt / 1000));
 
       if (!result.allowed) {
+        // Track rate limit hit in metrics
+        rateLimitHitsTotal.inc({ tenant_id: tenant.id });
+
         reply.header(
           'Retry-After',
           Math.ceil((result.resetAt - Date.now()) / 1000)
