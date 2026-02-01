@@ -13,16 +13,25 @@ An API Gateway is a server that acts as the single entry point for all client re
 - **Provides resilience** (retries, circuit breakers, fallbacks)
 - **Collects metrics** for observability
 
-```
-┌─────────┐     ┌─────────────┐     ┌──────────────┐
-│ Client  │────▶│ API Gateway │────▶│ Service A    │
-└─────────┘     │             │     └──────────────┘
-                │  • Auth     │     ┌──────────────┐
-                │  • Rate Limit────▶│ Service B    │
-                │  • Metrics  │     └──────────────┘
-                │  • Routing  │     ┌──────────────┐
-                └─────────────┘────▶│ Service C    │
-                                    └──────────────┘
+```mermaid
+flowchart LR
+    Client([Client])
+
+    subgraph Gateway[API Gateway]
+        Auth[Auth]
+        RateLimit[Rate Limit]
+        Metrics[Metrics]
+        Routing[Routing]
+    end
+
+    ServiceA[Service A]
+    ServiceB[Service B]
+    ServiceC[Service C]
+
+    Client --> Gateway
+    Gateway --> ServiceA
+    Gateway --> ServiceB
+    Gateway --> ServiceC
 ```
 
 ## Learning Guide: Architectural Layers
@@ -50,7 +59,7 @@ This gateway was built in layers, each adding a key capability. Study each layer
 
 **Concepts:** Circuit breakers, retries, health checks, fallbacks
 
-- **Circuit Breaker**: Stops sending requests to failing services. States: CLOSED (normal) → OPEN (blocking) → HALF_OPEN (testing recovery). Prevents cascading failures.
+- **Circuit Breaker**: Stops sending requests to failing services. States: CLOSED (normal) → OPEN (blocking) → HALF_OPEN (testing recovery). Prevents cascading failures. Learn more: [The Circuit Breaker](https://maumercado.com/journal/the-circuit-breaker).
 - **Retry with Backoff**: Automatically retries failed requests with exponential delays (1s, 2s, 4s...) plus jitter to prevent thundering herd.
 - **Health Checks**: Background tasks that periodically ping upstream `/health` endpoints. Unhealthy services are skipped during routing.
 - **Fallbacks**: Returns cached/static responses when upstreams fail, so clients get useful error messages instead of timeouts.
@@ -199,42 +208,28 @@ The gateway uses a **modular monolith** architecture with clear separation:
 
 ### Request Flow
 
-```
-Client Request
-     ↓
-┌────────────────┐
-│  Tenant Auth   │  → Validates X-API-Key header against database
-└────────────────┘
-     ↓
-┌────────────────┐
-│  Rate Limiter  │  → Checks Redis sliding window counter
-└────────────────┘
-     ↓
-┌────────────────┐
-│ Route Matcher  │  → Finds matching route by method/path
-└────────────────┘
-     ↓
-┌────────────────┐
-│ Health Check   │  → Skips unhealthy upstreams
-└────────────────┘
-     ↓
-┌────────────────┐
-│Circuit Breaker │  → Blocks if upstream is failing
-└────────────────┘
-     ↓
-┌────────────────┐
-│  Retry Logic   │  → Retries with exponential backoff
-└────────────────┘
-     ↓
-┌────────────────┐
-│ Load Balancer  │  → Selects upstream (round-robin/weighted/random)
-└────────────────┘
-     ↓
-┌────────────────┐
-│  Transformer   │  → Applies header/path transformations
-└────────────────┘
-     ↓
-Upstream Response (or Fallback)
+```mermaid
+flowchart TD
+    Client([Client Request])
+    Auth[Tenant Auth<br/><small>Validates X-API-Key</small>]
+    RateLimit[Rate Limiter<br/><small>Redis sliding window</small>]
+    Router[Route Matcher<br/><small>method + path matching</small>]
+    Health[Health Check<br/><small>Skip unhealthy upstreams</small>]
+    CB[Circuit Breaker<br/><small>Block if failing</small>]
+    Retry[Retry Logic<br/><small>Exponential backoff</small>]
+    LB[Load Balancer<br/><small>round-robin/weighted/random</small>]
+    Transform[Transformer<br/><small>Header/path transforms</small>]
+    Response([Upstream Response<br/>or Fallback])
+
+    Client --> Auth
+    Auth --> RateLimit
+    RateLimit --> Router
+    Router --> Health
+    Health --> CB
+    CB --> Retry
+    Retry --> LB
+    LB --> Transform
+    Transform --> Response
 ```
 
 ### Dependency Injection
@@ -272,7 +267,7 @@ All resilience features are **opt-in** per route via the `resilience` field:
 
 #### Circuit Breaker
 
-Prevents cascading failures by stopping requests to failing upstreams.
+Prevents cascading failures by stopping requests to failing upstreams. For a deep dive into the circuit breaker pattern, see [The Circuit Breaker](https://maumercado.com/journal/the-circuit-breaker).
 
 - **CLOSED**: Normal operation, requests flow through
 - **OPEN**: Requests blocked after `failureThreshold` failures
