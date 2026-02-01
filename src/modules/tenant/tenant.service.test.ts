@@ -7,41 +7,12 @@ vi.mock('bcrypt', () => ({
   compare: vi.fn(),
 }));
 
-// Mock the repository
-vi.mock('./tenant.repository.js', () => ({
-  findTenantById: vi.fn(),
-  findTenantByName: vi.fn(),
-  findAllTenants: vi.fn(),
-  findActiveTenants: vi.fn(),
-  createTenant: vi.fn(),
-  updateTenant: vi.fn(),
-  deleteTenant: vi.fn(),
-}));
-
-// Mock Redis
-vi.mock('../../shared/redis/client.js', () => ({
-  redis: {
-    get: vi.fn(),
-    setex: vi.fn(),
-  },
-}));
-
-import * as tenantRepository from './tenant.repository.js';
-import * as tenantService from './tenant.service.js';
-import { redis } from '../../shared/redis/client.js';
+import type { TenantRepository } from './tenant.repository.js';
+import { createTenantService, type TenantService } from './tenant.service.js';
 import type { TenantRow } from './tenant.schema.js';
 
-const mockFindTenantById = tenantRepository.findTenantById as ReturnType<typeof vi.fn>;
-const mockFindTenantByName = tenantRepository.findTenantByName as ReturnType<typeof vi.fn>;
-const mockFindAllTenants = tenantRepository.findAllTenants as ReturnType<typeof vi.fn>;
-const mockFindActiveTenants = tenantRepository.findActiveTenants as ReturnType<typeof vi.fn>;
-const mockCreateTenant = tenantRepository.createTenant as ReturnType<typeof vi.fn>;
-const mockUpdateTenant = tenantRepository.updateTenant as ReturnType<typeof vi.fn>;
-const mockDeleteTenant = tenantRepository.deleteTenant as ReturnType<typeof vi.fn>;
 const mockHash = hash as ReturnType<typeof vi.fn>;
 const mockCompare = compare as ReturnType<typeof vi.fn>;
-const mockRedisGet = redis.get as ReturnType<typeof vi.fn>;
-const mockRedisSetex = redis.setex as ReturnType<typeof vi.fn>;
 
 const createMockTenantRow = (overrides: Partial<TenantRow> = {}): TenantRow => ({
   id: 'tenant-1',
@@ -54,15 +25,44 @@ const createMockTenantRow = (overrides: Partial<TenantRow> = {}): TenantRow => (
   ...overrides,
 });
 
+function createMockRepository(): TenantRepository {
+  return {
+    findTenantById: vi.fn(),
+    findTenantByName: vi.fn(),
+    findAllTenants: vi.fn(),
+    findActiveTenants: vi.fn(),
+    createTenant: vi.fn(),
+    updateTenant: vi.fn(),
+    deleteTenant: vi.fn(),
+  };
+}
+
+function createMockRedis() {
+  return {
+    get: vi.fn(),
+    setex: vi.fn(),
+  };
+}
+
 describe('Tenant Service', () => {
+  let mockRepository: TenantRepository;
+  let mockRedis: ReturnType<typeof createMockRedis>;
+  let tenantService: TenantService;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRepository = createMockRepository();
+    mockRedis = createMockRedis();
+    tenantService = createTenantService({
+      repository: mockRepository,
+      redis: mockRedis as never,
+    });
   });
 
   describe('getTenantById', () => {
     it('should return tenant when found', async () => {
       const mockRow = createMockTenantRow();
-      mockFindTenantById.mockResolvedValue(mockRow);
+      vi.mocked(mockRepository.findTenantById).mockResolvedValue(mockRow);
 
       const result = await tenantService.getTenantById('tenant-1');
 
@@ -74,7 +74,7 @@ describe('Tenant Service', () => {
     });
 
     it('should return null when not found', async () => {
-      mockFindTenantById.mockResolvedValue(null);
+      vi.mocked(mockRepository.findTenantById).mockResolvedValue(null);
 
       const result = await tenantService.getTenantById('non-existent');
 
@@ -85,7 +85,7 @@ describe('Tenant Service', () => {
   describe('getTenantByName', () => {
     it('should return tenant when found', async () => {
       const mockRow = createMockTenantRow();
-      mockFindTenantByName.mockResolvedValue(mockRow);
+      vi.mocked(mockRepository.findTenantByName).mockResolvedValue(mockRow);
 
       const result = await tenantService.getTenantByName('Test Tenant');
 
@@ -96,7 +96,7 @@ describe('Tenant Service', () => {
 
   describe('getAllTenants', () => {
     it('should return all tenants', async () => {
-      mockFindAllTenants.mockResolvedValue([
+      vi.mocked(mockRepository.findAllTenants).mockResolvedValue([
         createMockTenantRow({ id: 'tenant-1' }),
         createMockTenantRow({ id: 'tenant-2', name: 'Tenant 2' }),
       ]);
@@ -111,7 +111,7 @@ describe('Tenant Service', () => {
 
   describe('getActiveTenants', () => {
     it('should return only active tenants', async () => {
-      mockFindActiveTenants.mockResolvedValue([
+      vi.mocked(mockRepository.findActiveTenants).mockResolvedValue([
         createMockTenantRow({ id: 'tenant-1', isActive: true }),
       ]);
 
@@ -125,7 +125,7 @@ describe('Tenant Service', () => {
   describe('createTenant', () => {
     it('should hash API key and create tenant', async () => {
       mockHash.mockResolvedValue('$2b$12$hashedkey');
-      mockCreateTenant.mockResolvedValue(createMockTenantRow());
+      vi.mocked(mockRepository.createTenant).mockResolvedValue(createMockTenantRow());
 
       const result = await tenantService.createTenant({
         name: 'Test Tenant',
@@ -133,7 +133,7 @@ describe('Tenant Service', () => {
       });
 
       expect(mockHash).toHaveBeenCalledWith('my-secret-api-key', 12);
-      expect(mockCreateTenant).toHaveBeenCalledWith({
+      expect(mockRepository.createTenant).toHaveBeenCalledWith({
         name: 'Test Tenant',
         apiKeyHash: '$2b$12$hashedkey',
         defaultRateLimit: null,
@@ -143,7 +143,7 @@ describe('Tenant Service', () => {
 
     it('should include rate limit config when provided', async () => {
       mockHash.mockResolvedValue('$2b$12$hashedkey');
-      mockCreateTenant.mockResolvedValue(
+      vi.mocked(mockRepository.createTenant).mockResolvedValue(
         createMockTenantRow({
           defaultRateLimit: { requestsPerSecond: 100, burstSize: 150 },
         })
@@ -155,7 +155,7 @@ describe('Tenant Service', () => {
         defaultRateLimit: { requestsPerSecond: 100, burstSize: 150 },
       });
 
-      expect(mockCreateTenant).toHaveBeenCalledWith({
+      expect(mockRepository.createTenant).toHaveBeenCalledWith({
         name: 'Test Tenant',
         apiKeyHash: '$2b$12$hashedkey',
         defaultRateLimit: { requestsPerSecond: 100, burstSize: 150 },
@@ -173,14 +173,14 @@ describe('Tenant Service', () => {
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z',
       };
-      mockRedisGet.mockResolvedValue(JSON.stringify(cachedTenant));
+      mockRedis.get.mockResolvedValue(JSON.stringify(cachedTenant));
 
       const result = await tenantService.validateApiKey('my-api-key');
 
       expect(result).not.toBeNull();
       expect(result?.id).toBe('tenant-1');
       expect(result?.createdAt).toBeInstanceOf(Date);
-      expect(mockFindActiveTenants).not.toHaveBeenCalled();
+      expect(mockRepository.findActiveTenants).not.toHaveBeenCalled();
     });
 
     it('should return null when cached tenant is inactive', async () => {
@@ -192,7 +192,7 @@ describe('Tenant Service', () => {
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z',
       };
-      mockRedisGet.mockResolvedValue(JSON.stringify(cachedTenant));
+      mockRedis.get.mockResolvedValue(JSON.stringify(cachedTenant));
 
       const result = await tenantService.validateApiKey('my-api-key');
 
@@ -200,22 +200,22 @@ describe('Tenant Service', () => {
     });
 
     it('should validate against database when not cached', async () => {
-      mockRedisGet.mockResolvedValue(null);
-      mockFindActiveTenants.mockResolvedValue([createMockTenantRow()]);
+      mockRedis.get.mockResolvedValue(null);
+      vi.mocked(mockRepository.findActiveTenants).mockResolvedValue([createMockTenantRow()]);
       mockCompare.mockResolvedValue(true);
-      mockRedisSetex.mockResolvedValue('OK');
+      mockRedis.setex.mockResolvedValue('OK');
 
       const result = await tenantService.validateApiKey('my-api-key');
 
       expect(result).not.toBeNull();
-      expect(mockFindActiveTenants).toHaveBeenCalled();
+      expect(mockRepository.findActiveTenants).toHaveBeenCalled();
       expect(mockCompare).toHaveBeenCalledWith('my-api-key', '$2b$12$hashedkey');
-      expect(mockRedisSetex).toHaveBeenCalled();
+      expect(mockRedis.setex).toHaveBeenCalled();
     });
 
     it('should return null when API key does not match', async () => {
-      mockRedisGet.mockResolvedValue(null);
-      mockFindActiveTenants.mockResolvedValue([createMockTenantRow()]);
+      mockRedis.get.mockResolvedValue(null);
+      vi.mocked(mockRepository.findActiveTenants).mockResolvedValue([createMockTenantRow()]);
       mockCompare.mockResolvedValue(false);
 
       const result = await tenantService.validateApiKey('wrong-api-key');
@@ -224,14 +224,14 @@ describe('Tenant Service', () => {
     });
 
     it('should cache tenant after successful validation', async () => {
-      mockRedisGet.mockResolvedValue(null);
-      mockFindActiveTenants.mockResolvedValue([createMockTenantRow()]);
+      mockRedis.get.mockResolvedValue(null);
+      vi.mocked(mockRepository.findActiveTenants).mockResolvedValue([createMockTenantRow()]);
       mockCompare.mockResolvedValue(true);
-      mockRedisSetex.mockResolvedValue('OK');
+      mockRedis.setex.mockResolvedValue('OK');
 
       await tenantService.validateApiKey('my-api-key');
 
-      expect(mockRedisSetex).toHaveBeenCalledWith(
+      expect(mockRedis.setex).toHaveBeenCalledWith(
         'tenant:apikey:my-api-key',
         5,
         expect.any(String)
@@ -241,13 +241,13 @@ describe('Tenant Service', () => {
 
   describe('deactivateTenant', () => {
     it('should deactivate tenant', async () => {
-      mockUpdateTenant.mockResolvedValue(
+      vi.mocked(mockRepository.updateTenant).mockResolvedValue(
         createMockTenantRow({ isActive: false })
       );
 
       const result = await tenantService.deactivateTenant('tenant-1');
 
-      expect(mockUpdateTenant).toHaveBeenCalledWith('tenant-1', {
+      expect(mockRepository.updateTenant).toHaveBeenCalledWith('tenant-1', {
         isActive: false,
       });
       expect(result?.isActive).toBe(false);
@@ -256,13 +256,13 @@ describe('Tenant Service', () => {
 
   describe('activateTenant', () => {
     it('should activate tenant', async () => {
-      mockUpdateTenant.mockResolvedValue(
+      vi.mocked(mockRepository.updateTenant).mockResolvedValue(
         createMockTenantRow({ isActive: true })
       );
 
       const result = await tenantService.activateTenant('tenant-1');
 
-      expect(mockUpdateTenant).toHaveBeenCalledWith('tenant-1', {
+      expect(mockRepository.updateTenant).toHaveBeenCalledWith('tenant-1', {
         isActive: true,
       });
       expect(result?.isActive).toBe(true);
@@ -271,16 +271,16 @@ describe('Tenant Service', () => {
 
   describe('deleteTenant', () => {
     it('should delete tenant', async () => {
-      mockDeleteTenant.mockResolvedValue(true);
+      vi.mocked(mockRepository.deleteTenant).mockResolvedValue(true);
 
       const result = await tenantService.deleteTenant('tenant-1');
 
       expect(result).toBe(true);
-      expect(mockDeleteTenant).toHaveBeenCalledWith('tenant-1');
+      expect(mockRepository.deleteTenant).toHaveBeenCalledWith('tenant-1');
     });
 
     it('should return false when tenant not found', async () => {
-      mockDeleteTenant.mockResolvedValue(false);
+      vi.mocked(mockRepository.deleteTenant).mockResolvedValue(false);
 
       const result = await tenantService.deleteTenant('non-existent');
 

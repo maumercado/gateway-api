@@ -13,6 +13,9 @@ const queryClient = postgres(config.DATABASE_URL, {
 
 export const db = drizzle(queryClient, { schema });
 
+// Use a more generic type that's compatible with the plugin's declaration
+export type Database = ReturnType<typeof drizzle<typeof schema>>;
+
 export async function closeDatabase(): Promise<void> {
   await queryClient.end();
 }

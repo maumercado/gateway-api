@@ -1,20 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 
-import * as tenantServiceModule from '../modules/tenant/tenant.service.js';
-import type { CreateTenantInput, Tenant } from '../modules/tenant/tenant.types.js';
-
-export interface TenantService {
-  getTenantById(id: string): Promise<Tenant | null>;
-  getTenantByName(name: string): Promise<Tenant | null>;
-  getAllTenants(): Promise<Tenant[]>;
-  getActiveTenants(): Promise<Tenant[]>;
-  createTenant(input: CreateTenantInput): Promise<Tenant>;
-  validateApiKey(apiKey: string): Promise<Tenant | null>;
-  deactivateTenant(id: string): Promise<Tenant | null>;
-  activateTenant(id: string): Promise<Tenant | null>;
-  deleteTenant(id: string): Promise<boolean>;
-}
+import { createTenantRepository } from '../modules/tenant/tenant.repository.js';
+import { createTenantService, type TenantService } from '../modules/tenant/tenant.service.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -22,23 +10,17 @@ declare module 'fastify' {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/require-await
-const tenantServicePlugin: FastifyPluginAsync = async (fastify) => {
-  // Wrap the service module to expose it as a fastify decorator
-  const service: TenantService = {
-    getTenantById: tenantServiceModule.getTenantById,
-    getTenantByName: tenantServiceModule.getTenantByName,
-    getAllTenants: tenantServiceModule.getAllTenants,
-    getActiveTenants: tenantServiceModule.getActiveTenants,
-    createTenant: tenantServiceModule.createTenant,
-    validateApiKey: tenantServiceModule.validateApiKey,
-    deactivateTenant: tenantServiceModule.deactivateTenant,
-    activateTenant: tenantServiceModule.activateTenant,
-    deleteTenant: tenantServiceModule.deleteTenant,
-  };
+const tenantServicePlugin: FastifyPluginAsync = (fastify) => {
+  const repository = createTenantRepository(fastify.db);
+  const service = createTenantService({
+    repository,
+    redis: fastify.redis,
+  });
 
   fastify.decorate('tenantService', service);
   fastify.log.info('Tenant service registered');
+
+  return Promise.resolve();
 };
 
 export default fp(tenantServicePlugin, {

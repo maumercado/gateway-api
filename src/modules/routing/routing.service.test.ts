@@ -1,27 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock the repository
-vi.mock('./routing.repository.js', () => ({
-  findRouteById: vi.fn(),
-  findRoutesByTenantId: vi.fn(),
-  findActiveRoutesByTenantId: vi.fn(),
-  createRoute: vi.fn(),
-  updateRoute: vi.fn(),
-  deleteRoute: vi.fn(),
-}));
+import type { RoutingRepository } from './routing.repository.js';
+import { createRoutingService, type RoutingService } from './routing.service.js';
+import type { RouteRow } from './routing.schema.js';
 
 // Mock load balancer
 vi.mock('../../shared/load-balancer/index.js', () => ({
   selectUpstream: vi.fn((upstreams) => upstreams[0]),
 }));
-
-import * as routingRepository from './routing.repository.js';
-import * as routingService from './routing.service.js';
-import type { RouteRow } from './routing.schema.js';
-
-const mockFindActiveRoutesByTenantId = routingRepository.findActiveRoutesByTenantId as ReturnType<typeof vi.fn>;
-const mockFindRouteById = routingRepository.findRouteById as ReturnType<typeof vi.fn>;
-const mockCreateRoute = routingRepository.createRoute as ReturnType<typeof vi.fn>;
 
 const createMockRoute = (overrides: Partial<RouteRow> = {}): RouteRow => ({
   id: 'route-1',
@@ -32,21 +18,39 @@ const createMockRoute = (overrides: Partial<RouteRow> = {}): RouteRow => ({
   upstreams: [{ url: 'http://upstream:3000' }],
   loadBalancing: 'round-robin',
   transform: null,
+  resilience: null,
   isActive: true,
   createdAt: new Date(),
   updatedAt: new Date(),
   ...overrides,
 });
 
+function createMockRepository(): RoutingRepository {
+  return {
+    findRouteById: vi.fn(),
+    findRoutesByTenantId: vi.fn(),
+    findActiveRoutesByTenantId: vi.fn(),
+    createRoute: vi.fn(),
+    updateRoute: vi.fn(),
+    deleteRoute: vi.fn(),
+    deleteRoutesByTenantId: vi.fn(),
+  };
+}
+
 describe('Routing Service', () => {
+  let mockRepository: RoutingRepository;
+  let routingService: RoutingService;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRepository = createMockRepository();
+    routingService = createRoutingService({ repository: mockRepository });
   });
 
   describe('getRouteById', () => {
     it('should return route when found', async () => {
       const mockRoute = createMockRoute();
-      mockFindRouteById.mockResolvedValue(mockRoute);
+      vi.mocked(mockRepository.findRouteById).mockResolvedValue(mockRoute);
 
       const result = await routingService.getRouteById('route-1');
 
@@ -55,7 +59,7 @@ describe('Routing Service', () => {
     });
 
     it('should return null when not found', async () => {
-      mockFindRouteById.mockResolvedValue(null);
+      vi.mocked(mockRepository.findRouteById).mockResolvedValue(null);
 
       const result = await routingService.getRouteById('non-existent');
 
@@ -66,7 +70,7 @@ describe('Routing Service', () => {
   describe('createRoute', () => {
     it('should create route with default values', async () => {
       const mockRoute = createMockRoute();
-      mockCreateRoute.mockResolvedValue(mockRoute);
+      vi.mocked(mockRepository.createRoute).mockResolvedValue(mockRoute);
 
       const result = await routingService.createRoute({
         tenantId: 'tenant-1',
@@ -75,7 +79,7 @@ describe('Routing Service', () => {
         upstreams: [{ url: 'http://upstream:3000' }],
       });
 
-      expect(mockCreateRoute).toHaveBeenCalledWith({
+      expect(mockRepository.createRoute).toHaveBeenCalledWith({
         tenantId: 'tenant-1',
         method: 'GET',
         path: '/api/users',
@@ -83,6 +87,7 @@ describe('Routing Service', () => {
         upstreams: [{ url: 'http://upstream:3000' }],
         loadBalancing: 'round-robin',
         transform: null,
+        resilience: null,
       });
       expect(result.id).toBe('route-1');
     });
@@ -91,7 +96,7 @@ describe('Routing Service', () => {
   describe('matchRoute', () => {
     describe('exact path matching', () => {
       it('should match exact path', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ path: '/api/users', pathType: 'exact' }),
         ]);
 
@@ -102,7 +107,7 @@ describe('Routing Service', () => {
       });
 
       it('should not match different path', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ path: '/api/users', pathType: 'exact' }),
         ]);
 
@@ -112,7 +117,7 @@ describe('Routing Service', () => {
       });
 
       it('should not match path with extra segments', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ path: '/api/users', pathType: 'exact' }),
         ]);
 
@@ -124,7 +129,7 @@ describe('Routing Service', () => {
 
     describe('prefix path matching', () => {
       it('should match exact prefix path', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ path: '/api', pathType: 'prefix' }),
         ]);
 
@@ -134,7 +139,7 @@ describe('Routing Service', () => {
       });
 
       it('should match path with prefix', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ path: '/api', pathType: 'prefix' }),
         ]);
 
@@ -144,7 +149,7 @@ describe('Routing Service', () => {
       });
 
       it('should match nested path with prefix', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ path: '/api', pathType: 'prefix' }),
         ]);
 
@@ -154,7 +159,7 @@ describe('Routing Service', () => {
       });
 
       it('should not match partial prefix', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ path: '/api', pathType: 'prefix' }),
         ]);
 
@@ -167,7 +172,7 @@ describe('Routing Service', () => {
 
     describe('regex path matching', () => {
       it('should match simple regex pattern', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ path: '/api/users/\\d+', pathType: 'regex' }),
         ]);
 
@@ -177,7 +182,7 @@ describe('Routing Service', () => {
       });
 
       it('should not match when regex does not match', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ path: '/api/users/\\d+', pathType: 'regex' }),
         ]);
 
@@ -187,7 +192,7 @@ describe('Routing Service', () => {
       });
 
       it('should match complex regex pattern', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({
             path: '/api/(users|posts)/[a-f0-9-]+',
             pathType: 'regex',
@@ -204,7 +209,7 @@ describe('Routing Service', () => {
       });
 
       it('should return null for invalid regex pattern', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ path: '[invalid(regex', pathType: 'regex' }),
         ]);
 
@@ -216,7 +221,7 @@ describe('Routing Service', () => {
 
     describe('method matching', () => {
       it('should match specific method', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ method: 'POST' }),
         ]);
 
@@ -226,7 +231,7 @@ describe('Routing Service', () => {
       });
 
       it('should not match different method', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ method: 'POST' }),
         ]);
 
@@ -236,7 +241,7 @@ describe('Routing Service', () => {
       });
 
       it('should match wildcard method', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ method: '*' }),
         ]);
 
@@ -252,7 +257,7 @@ describe('Routing Service', () => {
 
     describe('route priority', () => {
       it('should match first route when multiple routes match', async () => {
-        mockFindActiveRoutesByTenantId.mockResolvedValue([
+        vi.mocked(mockRepository.findActiveRoutesByTenantId).mockResolvedValue([
           createMockRoute({ id: 'route-1', path: '/api', pathType: 'prefix' }),
           createMockRoute({ id: 'route-2', path: '/api/users', pathType: 'exact' }),
         ]);

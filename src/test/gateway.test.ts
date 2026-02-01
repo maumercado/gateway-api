@@ -17,10 +17,8 @@ vi.mock('../shared/config/index.js', () => ({
   },
 }));
 
-// Mock tenant service
-vi.mock('../modules/tenant/tenant.service.js', () => ({
-  validateApiKey: vi.fn(),
-}));
+// Create mock validateApiKey function
+const mockValidateApiKey = vi.fn();
 
 // Mock rate limiter
 vi.mock('../shared/rate-limiter/index.js', () => ({
@@ -51,12 +49,11 @@ vi.mock('../plugins/redis.js', async () => {
 // Mock service plugins for dependency resolution
 vi.mock('../plugins/tenant-service.js', async () => {
   const fp = (await import('fastify-plugin')).default;
-  const { validateApiKey } = await import('../modules/tenant/tenant.service.js');
   return {
     default: fp(
       async (fastify: { decorate: (name: string, value: unknown) => void }) => {
         fastify.decorate('tenantService', {
-          validateApiKey,
+          validateApiKey: mockValidateApiKey,
           getTenantById: vi.fn(),
           getTenantByName: vi.fn(),
           getAllTenants: vi.fn(),
@@ -93,7 +90,6 @@ vi.mock('../plugins/routing-service.js', async () => {
 });
 
 // Import after mocking
-import { validateApiKey } from '../modules/tenant/tenant.service.js';
 import { checkRateLimit } from '../shared/rate-limiter/index.js';
 import databasePlugin from '../plugins/database.js';
 import redisPlugin from '../plugins/redis.js';
@@ -164,7 +160,6 @@ describe('Gateway', () => {
 
   describe('Tenant Auth Plugin', () => {
     let app: ReturnType<typeof Fastify>;
-    const mockValidateApiKey = validateApiKey as ReturnType<typeof vi.fn>;
 
     beforeEach(async () => {
       vi.clearAllMocks();
@@ -254,7 +249,6 @@ describe('Gateway', () => {
 
   describe('Rate Limit Plugin', () => {
     let app: ReturnType<typeof Fastify>;
-    const mockValidateApiKey = validateApiKey as ReturnType<typeof vi.fn>;
     const mockCheckRateLimit = checkRateLimit as ReturnType<typeof vi.fn>;
 
     beforeEach(async () => {

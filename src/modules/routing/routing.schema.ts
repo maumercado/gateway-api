@@ -8,7 +8,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
-import type { TransformConfig, UpstreamConfig } from '../../shared/types/index.js';
+import type { ResilienceConfig, TransformConfig, UpstreamConfig } from '../../shared/types/index.js';
 import { tenants } from '../tenant/tenant.schema.js';
 
 export const pathTypeEnum = pgEnum('path_type', ['exact', 'prefix', 'regex']);
@@ -32,6 +32,7 @@ export const routes = pgTable('routes', {
     .notNull()
     .default('round-robin'),
   transform: jsonb('transform').$type<TransformConfig>(),
+  resilience: jsonb('resilience').$type<ResilienceConfig>(),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()

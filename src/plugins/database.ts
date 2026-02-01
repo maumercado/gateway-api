@@ -1,14 +1,11 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import fp from 'fastify-plugin';
 
-import { db, closeDatabase, schema } from '../shared/database/client.js';
-
-type DatabaseSchema = typeof schema;
+import { db, closeDatabase, type Database } from '../shared/database/client.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
-    db: PostgresJsDatabase<DatabaseSchema>;
+    db: Database;
   }
 }
 
