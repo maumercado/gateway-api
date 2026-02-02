@@ -1,5 +1,11 @@
 # Multi-tenant API Gateway
 
+[![CI](https://github.com/maumercado/gateway-api/actions/workflows/ci.yml/badge.svg)](https://github.com/maumercado/gateway-api/actions/workflows/ci.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-24+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Fastify](https://img.shields.io/badge/Fastify-5.x-000000?logo=fastify&logoColor=white)](https://fastify.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 A production-ready, multi-tenant API Gateway built with Node.js, TypeScript, and Fastify. This project serves as both a functional gateway and a **learning resource** for understanding API gateway patterns.
 
 ## What is an API Gateway?
