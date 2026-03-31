@@ -1,5 +1,3 @@
-import { selectUpstream } from '../../shared/load-balancer/index.js';
-
 import type { RoutingRepository } from './routing.repository.js';
 import type { RouteRow } from './routing.schema.js';
 import type { CreateRouteInput, MatchedRoute, Route } from './routing.types.js';
@@ -133,17 +131,7 @@ export function createRoutingService(deps: RoutingServiceDeps): RoutingService {
           continue;
         }
 
-        // Found a match - select upstream using load balancing strategy
-        const upstream = selectUpstream(
-          route.upstreams,
-          route.loadBalancing,
-          route.id
-        );
-
-        return {
-          route,
-          upstream,
-        };
+        return { route };
       }
 
       return null;

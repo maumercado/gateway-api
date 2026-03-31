@@ -11,8 +11,53 @@ export interface RateLimitResult {
 const DEFAULT_WINDOW_MS = 1000; // 1 second window
 
 /**
- * Sliding window rate limiter using Redis
- * Uses a sorted set to track request timestamps
+ * Lua script for atomic sliding window rate limiting.
+ *
+ * All operations — expire old entries, count, conditionally add, get oldest
+ * for reset time — execute in a single atomic round trip.
+ *
+ * KEYS[1]: sorted set key
+ * ARGV[1]: current timestamp (ms)
+ * ARGV[2]: window start timestamp (ms, = now - windowMs)
+ * ARGV[3]: rate limit (max requests per window)
+ * ARGV[4]: unique member string for this request
+ * ARGV[5]: TTL in seconds for key expiry
+ *
+ * Returns: [allowed (0|1), remaining, oldest_score, limit]
+ */
+const RATE_LIMIT_SCRIPT = `
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window_start = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local member = ARGV[4]
+local ttl = tonumber(ARGV[5])
+
+redis.call('ZREMRANGEBYSCORE', key, 0, window_start)
+
+local count = redis.call('ZCARD', key)
+local allowed = 0
+local remaining = 0
+
+if count < limit then
+  redis.call('ZADD', key, now, member)
+  redis.call('EXPIRE', key, ttl)
+  allowed = 1
+  remaining = limit - count - 1
+end
+
+local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+local oldest_score = now
+if #oldest >= 2 then
+  oldest_score = tonumber(oldest[2])
+end
+
+return {allowed, remaining, oldest_score, limit}
+`;
+
+/**
+ * Sliding window rate limiter using Redis sorted sets.
+ * Uses an atomic Lua script — single round trip, no race conditions.
  */
 export async function checkRateLimit(
   key: string,
@@ -22,48 +67,27 @@ export async function checkRateLimit(
   const windowMs = DEFAULT_WINDOW_MS;
   const windowStart = now - windowMs;
   const limit = config.burstSize ?? config.requestsPerSecond;
-
   const redisKey = `ratelimit:${key}`;
+  const member = `${now}:${Math.random()}`;
+  const ttl = Math.ceil(windowMs / 1000) + 1;
 
-  // Use a pipeline for atomic operations
-  const pipeline = redis.pipeline();
+  const result = await redis.eval(
+    RATE_LIMIT_SCRIPT,
+    1,
+    redisKey,
+    now,
+    windowStart,
+    limit,
+    member,
+    ttl
+  ) as [number, number, number, number];
 
-  // Remove old entries outside the window
-  pipeline.zremrangebyscore(redisKey, 0, windowStart);
-
-  // Count current requests in window
-  pipeline.zcard(redisKey);
-
-  // Add current request with timestamp as score
-  pipeline.zadd(redisKey, now, `${now}:${Math.random()}`);
-
-  // Set expiry on the key
-  pipeline.expire(redisKey, Math.ceil(windowMs / 1000) + 1);
-
-  const results = await pipeline.exec();
-
-  // Get the count before adding current request
-  const currentCount = (results?.[1]?.[1] as number) ?? 0;
-
-  const allowed = currentCount < limit;
-  const remaining = Math.max(0, limit - currentCount - 1);
-
-  // Get the oldest entry to calculate reset time
-  const oldestEntries = await redis.zrange(redisKey, 0, 0, 'WITHSCORES');
-  const oldestTimestamp = oldestEntries[1]
-    ? parseInt(oldestEntries[1], 10)
-    : now;
-  const resetAt = oldestTimestamp + windowMs;
-
-  if (!allowed) {
-    // Remove the request we just added since it's not allowed
-    await redis.zremrangebyscore(redisKey, now, now + 1);
-  }
+  const [allowedInt, remaining, oldestScore] = result;
 
   return {
-    allowed,
+    allowed: allowedInt === 1,
     remaining,
-    resetAt,
+    resetAt: oldestScore + windowMs,
     limit,
   };
 }

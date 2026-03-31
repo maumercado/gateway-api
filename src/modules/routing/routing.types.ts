@@ -32,6 +32,5 @@ export interface CreateRouteInput {
 
 export interface MatchedRoute {
   route: Route;
-  upstream: UpstreamConfig;
   pathParams?: Record<string, string>;
 }

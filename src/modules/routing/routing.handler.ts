@@ -1,7 +1,11 @@
+import { Readable } from 'node:stream';
+import type { ReadableStream as WebReadableStream } from 'node:stream/web';
+
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { createCircuitBreaker } from '../../shared/circuit-breaker/index.js';
 import { sendFallbackResponse, shouldUseFallback } from '../../shared/fallback/index.js';
+import { selectUpstream } from '../../shared/load-balancer/index.js';
 import {
   normalizeUpstreamLabel,
   retryAttemptsTotal,
@@ -24,6 +28,9 @@ import type { Route } from './routing.types.js';
 interface ProxyRequest extends FastifyRequest {
   tenant: Tenant;
 }
+
+// Statuses that carry no response body
+const NO_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 /**
  * Resolve timeout based on configuration and HTTP method
@@ -139,8 +146,45 @@ export async function handleProxy(
     });
   }
 
-  const { route, upstream } = matched;
+  const { route } = matched;
   const resilience = route.resilience;
+
+  // Determine candidate upstreams — filter by health if checks are enabled
+  let candidateUpstreams = route.upstreams;
+
+  if (resilience?.healthCheck?.enabled && healthChecker) {
+    const healthResults = await Promise.all(
+      route.upstreams.map(async (u) => ({
+        upstream: u,
+        healthy: await healthChecker.isUpstreamHealthy(tenant.id, route.id, u.url),
+      }))
+    );
+
+    const healthyUpstreams = healthResults
+      .filter((r) => r.healthy)
+      .map((r) => r.upstream);
+
+    if (healthyUpstreams.length === 0) {
+      log.warn(
+        { tenantId: tenant.id, routeId: route.id },
+        'All upstreams are unhealthy'
+      );
+
+      if (shouldUseFallback(resilience.fallback)) {
+        return sendFallbackResponse(reply, resilience.fallback);
+      }
+
+      return reply.status(503).send({
+        error: 'Service Unavailable',
+        message: 'All upstream services are unhealthy',
+      });
+    }
+
+    candidateUpstreams = healthyUpstreams;
+  }
+
+  // Select upstream via load balancing strategy from the healthy candidate pool
+  const upstream = selectUpstream(candidateUpstreams, route.loadBalancing, route.id);
 
   // Build the upstream URL
   let upstreamUrl = upstream.url;
@@ -165,32 +209,6 @@ export async function handleProxy(
     },
     'Proxying request to upstream'
   );
-
-  // Check health status if health checks are enabled
-  if (resilience?.healthCheck?.enabled && healthChecker) {
-    const isHealthy = await healthChecker.isUpstreamHealthy(
-      tenant.id,
-      route.id,
-      upstream.url
-    );
-
-    if (!isHealthy) {
-      log.warn(
-        { tenantId: tenant.id, upstreamUrl, routeId: route.id },
-        'Upstream marked as unhealthy by health check'
-      );
-
-      // Use fallback if configured, otherwise return 503
-      if (shouldUseFallback(resilience.fallback)) {
-        return sendFallbackResponse(reply, resilience.fallback);
-      }
-
-      return reply.status(503).send({
-        error: 'Service Unavailable',
-        message: 'Upstream service is unhealthy',
-      });
-    }
-  }
 
   // Create circuit breaker if configured
   const circuitBreaker = resilience?.circuitBreaker?.enabled
@@ -384,10 +402,9 @@ export async function handleProxy(
       }
     }
 
-    // Forward the response
+    // Forward the response headers (skip hop-by-hop)
     let responseHeaders: Record<string, string> = {};
     upstreamResponse.headers.forEach((value, key) => {
-      // Skip hop-by-hop headers
       if (
         !['connection', 'keep-alive', 'transfer-encoding'].includes(
           key.toLowerCase()
@@ -400,12 +417,16 @@ export async function handleProxy(
     // Apply response header transformations
     responseHeaders = transformResponseHeaders(responseHeaders, route.transform);
 
-    const responseBody = await upstreamResponse.text();
+    // Stream the response body — avoid buffering large payloads in memory.
+    // For status codes that carry no body, or HEAD requests, send headers only.
+    if (NO_BODY_STATUSES.has(upstreamResponse.status) || method === 'HEAD' || !upstreamResponse.body) {
+      return reply.status(upstreamResponse.status).headers(responseHeaders).send();
+    }
 
     return reply
       .status(upstreamResponse.status)
       .headers(responseHeaders)
-      .send(responseBody);
+      .send(Readable.fromWeb(upstreamResponse.body as WebReadableStream));
   } catch (error) {
     // Record failure in circuit breaker
     if (circuitBreaker) {

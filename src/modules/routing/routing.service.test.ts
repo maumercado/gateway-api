@@ -4,11 +4,6 @@ import type { RoutingRepository } from './routing.repository.js';
 import { createRoutingService, type RoutingService } from './routing.service.js';
 import type { RouteRow } from './routing.schema.js';
 
-// Mock load balancer
-vi.mock('../../shared/load-balancer/index.js', () => ({
-  selectUpstream: vi.fn((upstreams) => upstreams[0]),
-}));
-
 const createMockRoute = (overrides: Partial<RouteRow> = {}): RouteRow => ({
   id: 'route-1',
   tenantId: 'tenant-1',

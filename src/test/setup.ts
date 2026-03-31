@@ -5,12 +5,17 @@ vi.mock('../shared/redis/client.js', () => ({
   redis: {
     get: vi.fn(),
     set: vi.fn(),
+    setex: vi.fn(),
     del: vi.fn(),
     incr: vi.fn(),
     expire: vi.fn(),
-    multi: vi.fn(() => ({
+    zrange: vi.fn(),
+    zremrangebyscore: vi.fn(),
+    eval: vi.fn(),
+    pipeline: vi.fn(() => ({
       zremrangebyscore: vi.fn().mockReturnThis(),
       zadd: vi.fn().mockReturnThis(),
+      zcard: vi.fn().mockReturnThis(),
       zcount: vi.fn().mockReturnThis(),
       expire: vi.fn().mockReturnThis(),
       exec: vi.fn().mockResolvedValue([null, null, [null, 1], null]),
